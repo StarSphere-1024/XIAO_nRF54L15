@@ -6,3 +6,9 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(blinky)
 
 target_sources(app PRIVATE ../src/main.c)
+
+set(U8G2_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../lib/u8g2)
+set(U8G2_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/u8g2_build_dir)
+add_subdirectory(${U8G2_SOURCE_DIR} ${U8G2_BINARY_DIR})
+target_link_libraries(app PRIVATE u8g2)
+

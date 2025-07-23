@@ -1,147 +1,165 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zephyr/display/cfb.h>
-#include <stdio.h>
-#include <string.h>
+#include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/gpio.h> // Ensure this is included for the GPIO_DT_SPEC_GET_OR check
 
-#define LOG_LEVEL CONFIG_LOG_DEFAULT_LEVEL
+// Include u8g2 library header files
+#include "u8g2.h"
+#include "u8x8.h"
+
+// Include logging for debugging purposes
+#define LOG_LEVEL CONFIG_LOG_DEFAULT_LEVEL // You can temporarily set this to CONFIG_LOG_LEVEL_DBG for max logs
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main_app, LOG_LEVEL);
 
-/**
- * @brief Initializes the display device.
- * @param[out] dev Pointer to the display device struct.
- * @return 0 on success, -1 on failure.
- */
-static int display_init(const struct device **dev) {
-    *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-    if (!device_is_ready(*dev)) {
-        LOG_ERR("Device %s not ready", (*dev)->name);
-        return -1;
-    }
+#define OLED_I2C_ADDR 0x3C // Confirmed by scan, so stick to this.
 
-    if (display_set_pixel_format(*dev, PIXEL_FORMAT_MONO10) != 0) {
-        if (display_set_pixel_format(*dev, PIXEL_FORMAT_MONO01) != 0) {
-            LOG_ERR("Failed to set required pixel format");
-            return -1;
-        }
-    }
+// Define the I2C device node from your DTS/overlay
+// Make sure this matches the actual I2C node in your board's DTS or app.overlay
+// Based on your scan, "xiao_i2c" seems to be the correct label.
+#define I2C_DEV_NODE DT_NODELABEL(i2c22)
 
-    LOG_INF("Initialized %s", (*dev)->name);
-    return 0;
-}
+// Global u8g2 object
+u8g2_t u8g2;
 
-/**
- * @brief Initializes the Compact Framebuffer (CFB) and display blanking.
- * @param dev Pointer to the display device struct.
- * @return 0 on success, -1 on failure.
- */
-static int framebuffer_setup(const struct device *dev) {
-    if (cfb_framebuffer_init(dev)) {
-        LOG_ERR("Framebuffer initialization failed!");
-        return -1;
-    }
-    cfb_framebuffer_clear(dev, true);
-    display_blanking_off(dev);
-    return 0;
-}
+// u8g2's Zephyr I2C communication callback function
+uint8_t u8x8_byte_zephyr_hw_i2c(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
+{
+    static const struct device *i2c_dev = NULL; // Declared static to get pointer only once
 
-/**
- * @brief Selects a suitable font for the display.
- * @param dev Pointer to the display device struct.
- * @param[out] font_width Pointer to store the width of the selected font.
- * @param[out] font_height Pointer to store the height of the selected font.
- * @return 0 on success, -1 if no suitable font is found.
- */
-static int select_font(const struct device *dev, uint8_t *font_width, uint8_t *font_height) {
-    int chosen_font_idx = -1;
-    uint8_t current_font_width, current_font_height;
-
-    for (int idx = 0; idx < 42; idx++) {
-        if (cfb_get_font_size(dev, idx, &current_font_width, &current_font_height) == 0) {
-            if (current_font_width == 8 && current_font_height == 8) {
-                chosen_font_idx = idx;
-                *font_width = current_font_width;
-                *font_height = current_font_height;
-                cfb_framebuffer_set_font(dev, chosen_font_idx);
-                LOG_INF("Selected font idx: %d, width: %d, height: %d", chosen_font_idx, *font_width, *font_height);
-                break;
+    switch (msg)
+    {
+    case U8X8_MSG_BYTE_INIT:
+        // Get I2C device pointer
+        if (i2c_dev == NULL)
+        {
+            i2c_dev = DEVICE_DT_GET(I2C_DEV_NODE);
+            if (!device_is_ready(i2c_dev))
+            {
+                LOG_ERR("I2C device not ready! Node path: %s", DT_NODE_PATH(I2C_DEV_NODE));
+                return 0; // Failure
             }
-            if (chosen_font_idx == -1 && current_font_width > 0 && current_font_height > 0) {
-                chosen_font_idx = idx;
-                *font_width = current_font_width;
-                *font_height = current_font_height;
-                cfb_framebuffer_set_font(dev, chosen_font_idx);
-                LOG_INF("Defaulting to font idx: %d, width: %d, height: %d", chosen_font_idx, *font_width, *font_height);
-            }
-        } else {
-            break;
+            LOG_INF("I2C device found: %s", i2c_dev->name);
         }
+        break;
+    case U8X8_MSG_BYTE_SET_DC:
+        // For I2C, D/C is controlled by the control byte (0x00 for command, 0x40 for data)
+        // This case is usually for SPI or parallel interfaces.
+        break;
+    case U8X8_MSG_BYTE_START_TRANSFER:
+        // Start transfer, usually no specific operation needed for I2C here
+        LOG_DBG("I2C transfer start.");
+        break;
+    case U8X8_MSG_BYTE_SEND:
+        // arg_ptr points to the buffer, arg_int is the number of bytes in that buffer.
+        // For I2C, u8g2 driver prepends a control byte (0x00 or 0x40).
+        if (i2c_write(i2c_dev, arg_ptr, arg_int, OLED_I2C_ADDR) != 0)
+        {
+            LOG_ERR("I2C write failed to 0x%02X! Len: %d, First byte: 0x%02X",
+                    OLED_I2C_ADDR, arg_int, ((uint8_t *)arg_ptr)[0]);
+            return 0; // Failure
+        }
+        LOG_DBG("I2C written %d bytes to 0x%02X. First byte: 0x%02X",
+                arg_int, OLED_I2C_ADDR, ((uint8_t *)arg_ptr)[0]);
+        break;
+    case U8X8_MSG_BYTE_END_TRANSFER:
+        // End transfer, usually no specific operation needed
+        LOG_DBG("I2C transfer end.");
+        break;
+    default:
+        LOG_WRN("Unknown U8X8_MSG_BYTE message: %d", msg);
+        return 0; // Unknown message
     }
-
-    if (chosen_font_idx == -1) {
-        LOG_ERR("No suitable font found or loaded!");
-        return -1;
-    }
-    return 0;
+    return 1; // Success
 }
 
-/**
- * @brief Prints a single line of text at specified row and column.
- * @param dev Pointer to the display device struct.
- * @param text The string to print.
- * @param row The row number (0-indexed) where the text should start.
- * @param col The column number (0-indexed) where the text should start.
- * @param font_width The width of the currently selected font in pixels.
- * @param font_height The height of the currently selected font in pixels.
- */
-static void print_text_by_row_col(const struct device *dev, const char *text, int row, int col,
-                                  uint8_t font_width, uint8_t font_height) {
-    int pixel_x = col * font_width;
-    int pixel_y = row * font_height;
+// u8g2's Zephyr GPIO/delay callback function
+uint8_t u8x8_gpio_and_delay_zephyr(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
+{
+    // If you confirmed RST is not needed, this part becomes simple.
+    // If you ever need a GPIO for future displays, this is where you'd put it.
 
-    if (cfb_print(dev, text, pixel_x, pixel_y)) {
-        LOG_ERR("Failed to print text: \"%s\" at row %d, col %d", text, row, col);
+    switch (msg)
+    {
+    case U8X8_MSG_DELAY_NANO:
+        k_busy_wait(arg_int);
+        break;
+    case U8X8_MSG_DELAY_100NANO:
+        k_busy_wait(arg_int * 100);
+        break;
+    case U8X8_MSG_DELAY_10MICRO:
+        k_busy_wait(arg_int * 10);
+        break;
+    case U8X8_MSG_DELAY_MILLI:
+        k_sleep(K_MSEC(arg_int));
+        break;
+    case U8X8_MSG_DELAY_I2C:
+        k_busy_wait(arg_int * 10); // Adjust as needed for I2C clock stretching
+        break;
+    // Since RST is not needed, these GPIO cases can remain empty or be removed if you prefer.
+    // U8X8_MSG_GPIO_RESET will be called by u8g2, but we don't need to do anything.
+    case U8X8_MSG_GPIO_RESET:
+    case U8X8_MSG_GPIO_DC:
+    case U8X8_MSG_GPIO_CS:
+    case U8X8_MSG_GPIO_I2C_CLOCK:
+    case U8X8_MSG_GPIO_I2C_DATA:
+    case U8X8_MSG_GPIO_SPI_CLOCK:
+    case U8X8_MSG_GPIO_SPI_DATA:
+        break;
+    default:
+        LOG_WRN("Unknown U8X8_MSG_GPIO_AND_DELAY message: %d", msg);
+        return 0; // Unknown message
     }
+    return 1; // Success
 }
 
-int main(void) {
-    const struct device *dev;
-    uint8_t font_width = 0;
-    uint8_t font_height = 0;
-    uint16_t x_res, y_res;
+int main(void)
+{
+    LOG_INF("Starting OLED u8g2 example...");
 
-    if (display_init(&dev) != 0) {
-        return 0;
+    // Select the appropriate initialization function
+    // U8G2_R0: no rotation
+    // u8x8_byte_zephyr_hw_i2c: our custom byte transmission callback
+    // u8x8_gpio_and_delay_zephyr: our custom GPIO and delay callback
+    u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_byte_zephyr_hw_i2c, u8x8_gpio_and_delay_zephyr);
+
+    // Set the OLED's I2C slave address
+    u8g2_SetI2CAddress(&u8g2, OLED_I2C_ADDR * 2); // u8g2 internally expects 8-bit address
+
+    // Initialize the u8g2 object
+    LOG_INF("Calling u8g2_InitDisplay...");
+    u8g2_InitDisplay(&u8g2);
+    LOG_INF("u8g2_InitDisplay called.");
+
+    // Wake up the display (if it was in power save mode)
+    LOG_INF("Calling u8g2_SetPowerSave...");
+    u8g2_SetPowerSave(&u8g2, 0); // 0 = active, 1 = power save
+    LOG_INF("u8g2_SetPowerSave called.");
+
+    // Optional: Set contrast to max to ensure visibility
+    u8g2_SetContrast(&u8g2, 255);
+    LOG_INF("Contrast set to 255.");
+
+    LOG_INF("u8g2 OLED initialized. Entering main loop.");
+
+    while (1)
+    {
+        u8g2_ClearBuffer(&u8g2); // Clear internal buffer
+
+        u8g2_SetFont(&u8g2, u8g2_font_ncenB14_tr); // Use u8g2 built-in font
+
+        u8g2_SetDrawColor(&u8g2, 1); // Set text color (1 = white, 0 = black)
+
+        u8g2_DrawStr(&u8g2, 0, 15, "nRF54L15");
+        u8g2_DrawStr(&u8g2, 0, 35, "hello world");
+        u8g2_DrawStr(&u8g2, 0, 55, "from u8g2");
+
+        // Draw a single pixel at (0,0) to check basic drawing
+        u8g2_DrawPixel(&u8g2, 0, 0);
+
+        u8g2_SendBuffer(&u8g2); // Transfer buffer contents to OLED
+
+        k_sleep(K_MSEC(1000)); // Update every 1 second
     }
-
-    if (framebuffer_setup(dev) != 0) {
-        return 0;
-    }
-
-    if (select_font(dev, &font_width, &font_height) != 0) {
-        return 0;
-    }
-
-    x_res = cfb_get_display_parameter(dev, CFB_DISPLAY_WIDTH);
-    y_res = cfb_get_display_parameter(dev, CFB_DISPLAY_HEIGH);
-    LOG_INF("Display resolution: %dx%d", x_res, y_res);
-    cfb_set_kerning(dev, 0);
-
-    while (1) {
-        cfb_framebuffer_clear(dev, false);
-
-        const char *line1_text = "nRF54L15";
-        // Print line1 at row 1, column 2
-        print_text_by_row_col(dev, line1_text, 1, 2, font_width, font_height);
-
-        const char *line2_text = "Hello World";
-        // Print line2 at row 2, column 1
-        print_text_by_row_col(dev, line2_text, 2, 1, font_width, font_height);
-
-        cfb_framebuffer_finalize(dev);
-        k_sleep(K_MSEC(1000));
-    }
-
     return 0;
 }
