@@ -73,7 +73,41 @@ int main(void)
     lv_obj_set_style_text_font(label, &lv_font_montserrat_24, LV_STATE_DEFAULT);
     lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
-    // Main loop
+    // 在右上角添加时间标签
+    lv_obj_t *time_label = lv_label_create(scr);
+    lv_label_set_text(time_label, "Time 07:21 PM");
+    lv_obj_set_style_text_color(time_label, lv_color_black(), LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_18, LV_STATE_DEFAULT);
+    lv_obj_align(time_label, LV_ALIGN_TOP_RIGHT, -20, 10);
+
+
+    lv_obj_t *zephyr_label = lv_label_create(scr);
+    lv_label_set_text(zephyr_label, "Powered by Zephyr");
+    lv_obj_set_style_text_color(zephyr_label, lv_color_black(), LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(zephyr_label, &lv_font_montserrat_24, LV_STATE_DEFAULT);
+    lv_obj_align(zephyr_label, LV_ALIGN_BOTTOM_LEFT, 20, -10);
+
+    lv_obj_t *author_label = lv_label_create(scr);
+    lv_label_set_text(author_label, "Author: Stellar");
+    lv_obj_set_style_text_color(author_label, lv_color_black(), LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(author_label, &lv_font_montserrat_16, LV_STATE_DEFAULT);
+    lv_obj_align(author_label, LV_ALIGN_BOTTOM_RIGHT, -20, -10);
+
+
+    // Add four squares at the top left with a for loop
+    lv_obj_t *squares[4];
+    int square_offsets[4] = {20, 60, 100, 140};
+    for (int i = 0; i < 4; i++) {
+        squares[i] = lv_obj_create(scr);
+        lv_obj_set_size(squares[i], 30, 30);
+        lv_obj_set_style_bg_color(squares[i], lv_color_white(), LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(squares[i], lv_color_black(), LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(squares[i], 2, LV_STATE_DEFAULT);
+        lv_obj_set_style_radius(squares[i], 0, LV_STATE_DEFAULT);
+        lv_obj_align(squares[i], LV_ALIGN_TOP_LEFT, square_offsets[i], 20);
+    }
+
+
     while (1) {
         lv_task_handler();
         k_sleep(K_MSEC(1000)); // Lower refresh rate, suitable for ePaper
